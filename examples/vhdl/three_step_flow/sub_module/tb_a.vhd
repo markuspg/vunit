@@ -7,33 +7,28 @@
 library vunit_lib;
 context vunit_lib.vunit_context;
 
-entity tb_example is
+entity tb_a is
   generic (
-    runner_cfg : string;
-    value : natural := 42);
+    runner_cfg : string);
 end entity;
 
-architecture tb of tb_example is
+architecture tb of tb_a is
 begin
   main : process
     function recurse(value : integer) return integer is
     begin
       if value <= 0 then
         return 0;
-      else
+      elsif value mod 2 = 0 then
         return 1 + recurse(value - 1);
+      else
+        return recurse(value - 1);
       end if;
     end;
   begin
     test_runner_setup(runner, runner_cfg);
 
-    while test_suite loop
-      if run("test") then
-      end if;
-
-      info("Running " & running_test_case & " with generic value = " & to_string(value));
-      info("Recurse = " & to_string(recurse(value)));
-    end loop;
+    info("Running tb_a: " & to_string(recurse(17)));
 
     test_runner_cleanup(runner);
   end process;

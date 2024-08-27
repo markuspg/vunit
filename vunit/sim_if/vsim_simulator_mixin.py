@@ -121,7 +121,7 @@ proc vunit_restart {{}} {{
 }}
 """
 
-    def _create_common_script(self, test_suite_name, config, script_path, output_path):
+    def _create_common_script(self, test_suite_name, config, script_path, output_path, simulation_target):
         """
         Create tcl script with functions common to interactive and batch modes
         """
@@ -164,7 +164,7 @@ proc vunit_run {} {
 """
         tcl += self._create_init_files_after_load(config)
         tcl += self._create_init_files_before_run(config)
-        tcl += self._create_load_function(test_suite_name, config, script_path)
+        tcl += self._create_load_function(test_suite_name, config, script_path, simulation_target)
         tcl += get_is_test_suite_done_tcl(get_result_file_name(output_path))
         tcl += self._create_run_function()
         tcl += self._create_restart_function()
@@ -307,6 +307,12 @@ proc vunit_run {} {
         except Process.NonZeroExitCode:
             return False
 
+    def _optimize(self, config, script_path):
+        """
+        Return simulation target or False if optimization failed or None the optimization step isn't supported.
+        """
+        return None
+
     def simulate(self, output_path, test_suite_name, config, elaborate_only):
         """
         Run a test bench
@@ -317,9 +323,13 @@ proc vunit_run {} {
         gui_file_name = script_path / "gui.do"
         batch_file_name = script_path / "batch.do"
 
+        simulation_target = self._optimize(config, script_path)
+        if simulation_target == False:
+            return False
+
         write_file(
             str(common_file_name),
-            self._create_common_script(test_suite_name, config, script_path, output_path),
+            self._create_common_script(test_suite_name, config, script_path, output_path, simulation_target),
         )
         write_file(str(gui_file_name), self._create_gui_script(str(common_file_name), config))
         write_file(

@@ -4,19 +4,28 @@
 #
 # Copyright (c) 2014-2024, Lars Asplund lars.anders.asplund@gmail.com
 
+from argparse import Namespace
 from pathlib import Path
-from vunit import VUnit
+from vunit import VUnit, VUnitCLI
+from os import environ
+
+cli = VUnitCLI()
+
+environ["VUNIT_SIMULATOR"] = "modelsim"
 
 vu = VUnit.from_argv()
 vu.add_vhdl_builtins()
 
-lib = vu.add_library("lib")
-lib.add_source_files(Path(__file__).parent / "*.vhd")
+lib1 = vu.add_library("lib1")
+lib1.add_source_files(Path(__file__).parent / "sub_module" / "*.vhd")
 
-tb = lib.test_bench("tb_example")
-test = tb.test("test 2")
+lib2 = vu.add_library("lib2")
+lib2.add_source_files(Path(__file__).parent / "*.vhd")
 
-for value in range(3):
+tb = lib2.test_bench("tb_example")
+test = tb.test("test")
+
+for value in range(5):
     test.add_config(name=f"{value}", generics=dict(value=value))
 
 vu.set_sim_option("modelsim.three_step_flow", True)

@@ -13,10 +13,11 @@ import os
 import logging
 from configparser import RawConfigParser
 from ..exceptions import CompileError
-from ..ostools import Process, file_exists
+from ..ostools import write_file, Process, file_exists
 from ..vhdl_standard import VHDL
 from . import SimulatorInterface, ListOfStringOption, StringOption, BooleanOption
 from .vsim_simulator_mixin import VsimSimulatorMixin, fix_path
+from threading import Lock, Event
 
 LOGGER = logging.getLogger(__name__)
 
@@ -100,6 +101,9 @@ class ModelSimInterface(VsimSimulatorMixin, SimulatorInterface):  # pylint: disa
         self._coverage_files = set()
         assert not (persistent and gui)
         self._create_modelsim_ini()
+        self._optimized_designs = dict()
+        self._optimized_libraries = dict()
+        self._vopt_lock = Lock()
 
     def _create_modelsim_ini(self):
         """
@@ -211,7 +215,7 @@ class ModelSimInterface(VsimSimulatorMixin, SimulatorInterface):  # pylint: disa
             os.makedirs(apath)
 
         if not file_exists(path):
-            proc = Process([str(Path(self._prefix) / "vlib"), "-unix", path], env=self.get_env())
+            proc = Process([str(Path(self._prefix) / "vlib"), "-unix", "-type", "directory", path], env=self.get_env())
             proc.consume_output(callback=None)
 
         if library_name in mapped_libraries and mapped_libraries[library_name] == path:
@@ -231,7 +235,164 @@ class ModelSimInterface(VsimSimulatorMixin, SimulatorInterface):  # pylint: disa
             del libraries["others"]
         return libraries
 
-    def _create_load_function(self, test_suite_name, config, output_path):
+    def _optimize(self, config, script_path):
+        three_step_flow = config.sim_options.get("modelsim.three_step_flow", False)
+
+        if config.architecture_name is None:
+            architecture_suffix = ""
+        else:
+            architecture_suffix = f"({config.architecture_name!s})"
+
+        design_to_optimize = (
+            config.library_name + "." + config.entity_name + architecture_suffix
+            if config.vhdl_configuration_name is None
+            else config.library_name + "." + config.vhdl_configuration_name
+        )
+
+        if not three_step_flow:
+            return design_to_optimize
+
+        optimize = False
+        has_library_lock = False
+        with self._vopt_lock:
+            if not self._optimized_designs.get(design_to_optimize, None):
+                self._optimized_designs[design_to_optimize] = dict(simulation_target=None, vopt_event=Event())
+                optimize = True
+
+                if not self._optimized_libraries.get(config.library_name, None):
+                    library_lock = Lock()
+                    library_lock.acquire()
+                    LOGGER.debug(f"Acquired library lock for {config.library_name} to optimize {design_to_optimize}")
+                    has_library_lock = True
+                    self._optimized_libraries[config.library_name] = library_lock
+
+            simulation_target, vopt_event = self._optimized_designs[design_to_optimize].values()
+
+        if optimize:
+            if not has_library_lock:
+                with self._vopt_lock:
+                    library_lock = self._optimized_libraries[config.library_name]
+
+                LOGGER.debug(f"Waiting for library lock for {config.library_name} to optimize {design_to_optimize}")
+                library_lock.acquire()
+                LOGGER.debug(f"Acquired library lock for {config.library_name} to optimize {design_to_optimize}")
+
+            LOGGER.debug(f"Optimizing {design_to_optimize}")
+
+            # vopt has limitations on how the optimized design can be named. Simply removing
+            # non-alphanumeric characters is a simple solution to that
+            simulation_target = "opt_" + "".join(ch for ch in design_to_optimize if ch.isalnum())
+
+            with self._vopt_lock:
+                self._optimized_designs[design_to_optimize]["simulation_target"] = simulation_target
+
+            vopt_flags = [
+                f"{design_to_optimize}",
+                f"-work {{{config.library_name}}}",
+                "-quiet",
+                f"-floatgenerics+{config.entity_name}.",
+                f"-o {{{simulation_target}}}",
+                self._vopt_extra_args(config),
+            ]
+
+            # There is a known bug in modelsim that prevents the -modelsimini flag from accepting
+            # a space in the path even with escaping, see issue #36
+            if " " not in self._sim_cfg_file_name:
+                modelsimini_option = f"-modelsimini {fix_path(self._sim_cfg_file_name)!s}"
+                vopt_flags.insert(0, modelsimini_option)
+
+            library_option = []
+            for library in self._libraries:
+                library_option += ["-L", library.name]
+
+            vopt_flags += library_option
+
+            tcl = """
+proc vunit_optimize {{vopt_extra_args ""}} {"""
+            tcl += """
+set vopt_failed [catch {{
+    eval vopt ${{vopt_extra_args}} {{{vopt_flags}}}
+}}]
+
+if {{${{vopt_failed}}}} {{
+    echo Command 'vopt ${{vopt_extra_args}} {vopt_flags}' failed
+    echo Bad flag from vopt_extra_args?
+    return true
+}}
+
+return False
+}}
+""".format(
+                vopt_flags=" ".join(vopt_flags)
+            )
+
+            optimize_file_name = script_path / "optimize.do"
+            write_file(str(optimize_file_name), tcl)
+
+            if self._persistent_shell is not None:
+                try:
+                    self._persistent_shell.execute(f'source "{fix_path(str(optimize_file_name))!s}"')
+                    self._persistent_shell.execute("set failed [vunit_optimize]")
+                    if self._persistent_shell.read_bool("failed"):
+                        status = False
+                    else:
+                        status = True
+
+                except Process.NonZeroExitCode:
+                    status = False
+            else:
+                tcl = f"""\
+onerror {{quit -code 1}}
+source "{fix_path(str(optimize_file_name))!s}"
+set failed [vunit_optimize]
+if {{$failed}} {{quit -code 1}}
+quit -code 0
+"""
+                batch_file_name = script_path / "batch_optimize.do"
+                write_file(str(batch_file_name), tcl)
+
+                try:
+                    args = [
+                        str(Path(self._prefix) / "vsim"),
+                        "-c",
+                        "-l",
+                        str(script_path / "transcript"),
+                        "-do",
+                        f'source "{fix_path(str(batch_file_name))!s}"',
+                    ]
+
+                    proc = Process(args, cwd=str(Path(self._sim_cfg_file_name).parent))
+                    proc.consume_output()
+                    status = True
+                except Process.NonZeroExitCode:
+                    status = False
+
+            with self._vopt_lock:
+                if not status:
+                    LOGGER.debug(f"Failed to optimize {design_to_optimize}.")
+                else:
+                    LOGGER.debug(f"{design_to_optimize} optimization completed.")
+                    self._optimized_designs[design_to_optimize]["vopt_event"].set()
+                self._optimized_libraries[config.library_name].release()
+
+            if not status:
+                return False
+
+        elif not simulation_target:
+            LOGGER.debug(f"Waiting for {design_to_optimize} to be optimized.")
+            # Do not completely block to allow for Ctrl+C
+            while not vopt_event.wait(0.05):
+                pass
+            LOGGER.debug(f"Done waiting for {design_to_optimize} to be optimized.")
+            with self._vopt_lock:
+                simulation_target = self._optimized_designs[design_to_optimize]["simulation_target"]
+
+        else:
+            LOGGER.debug(f"Reusing optimized {design_to_optimize}.")
+
+        return simulation_target
+
+    def _create_load_function(self, test_suite_name, config, output_path, simulation_target):
         """
         Create the vunit_load TCL function that runs the vsim command and loads the design
         """
@@ -244,11 +405,6 @@ class ModelSimInterface(VsimSimulatorMixin, SimulatorInterface):  # pylint: disa
         )
         pli_str = " ".join(f"-pli {{{fix_path(name)!s}}}" for name in config.sim_options.get("pli", []))
 
-        if config.architecture_name is None:
-            architecture_suffix = ""
-        else:
-            architecture_suffix = f"({config.architecture_name!s})"
-
         if config.sim_options.get("enable_coverage", False):
             coverage_file = str(Path(output_path) / "coverage.ucdb")
             self._coverage_files.add(coverage_file)
@@ -260,30 +416,6 @@ class ModelSimInterface(VsimSimulatorMixin, SimulatorInterface):  # pylint: disa
         else:
             coverage_save_cmd = ""
             coverage_args = ""
-
-        three_step_flow = config.sim_options.get("modelsim.three_step_flow", False)
-
-        design_to_optimize = (
-            config.library_name + "." + config.entity_name + architecture_suffix
-            if config.vhdl_configuration_name is None
-            else config.library_name + "." + config.vhdl_configuration_name
-        )
-
-        if three_step_flow:
-            # vopt has limitations on how the optimized design can be named. Simply removing
-            # non-alphanumeric characters is a simple solution to that
-            simulation_target = "opt_" + "".join(ch for ch in design_to_optimize if ch.isalnum())
-
-            vopt_flags = [
-                f"{design_to_optimize}",
-                f"-work {{{config.library_name}}}",
-                "-quiet",
-                f"-floatgenerics+{config.entity_name}.",
-                f"-o {{{simulation_target}}}",
-                self._vopt_extra_args(config),
-            ]
-        else:
-            simulation_target = design_to_optimize
 
         vsim_flags = [
             f"-wlf {{{fix_path(str(Path(output_path) / 'vsim.wlf'))!s}}}",
@@ -305,36 +437,16 @@ class ModelSimInterface(VsimSimulatorMixin, SimulatorInterface):  # pylint: disa
             modelsimini_option = f"-modelsimini {fix_path(self._sim_cfg_file_name)!s}"
             vsim_flags.insert(0, modelsimini_option)
 
-            if three_step_flow:
-                vopt_flags.insert(0, modelsimini_option)
-
         library_option = []
         for library in self._libraries:
             library_option += ["-L", library.name]
 
         vsim_flags += library_option
 
-        if three_step_flow:
-            vopt_flags += library_option
-
         vhdl_assert_stop_level_mapping = {"warning": 1, "error": 2, "failure": 3}
 
         tcl = """
 proc vunit_load {{vsim_extra_args ""} {vopt_extra_args ""}} {"""
-
-        if three_step_flow:
-            tcl += """
-    set vopt_failed [catch {{
-        eval vopt ${{vopt_extra_args}} {{{vopt_flags}}}
-    }}]
-
-    if {{${{vopt_failed}}}} {{
-       echo Command 'vopt ${{vopt_extra_args}} {vopt_flags}' failed
-       echo Bad flag from vopt_extra_args?
-       return true
-    }}""".format(
-                vopt_flags=" ".join(vopt_flags)
-            )
 
         tcl += """
     set vsim_failed [catch {{
