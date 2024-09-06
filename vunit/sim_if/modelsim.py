@@ -18,6 +18,7 @@ from ..vhdl_standard import VHDL
 from . import SimulatorInterface, ListOfStringOption, StringOption, BooleanOption
 from .vsim_simulator_mixin import VsimSimulatorMixin, fix_path
 from threading import Lock, Event
+from time import sleep
 
 LOGGER = logging.getLogger(__name__)
 
@@ -252,6 +253,10 @@ class ModelSimInterface(VsimSimulatorMixin, SimulatorInterface):  # pylint: disa
         if not three_step_flow:
             return design_to_optimize
 
+        for library in self._libraries:
+            if library.name == config.library_name:
+                break
+
         optimize = False
         has_library_lock = False
         with self._vopt_lock:
@@ -274,7 +279,12 @@ class ModelSimInterface(VsimSimulatorMixin, SimulatorInterface):  # pylint: disa
                     library_lock = self._optimized_libraries[config.library_name]
 
                 LOGGER.debug(f"Waiting for library lock for {config.library_name} to optimize {design_to_optimize}")
-                library_lock.acquire()
+                # Do not completely block to allow for Ctrl+C
+                while not library_lock.acquire(timeout=0.05):
+                    pass
+                while (Path(library.directory) / "_lock").exists():
+                    LOGGER.debug(f"Waiting for {Path(library.directory) / "_lock"} to be removed")
+                    sleep(0.05)
                 LOGGER.debug(f"Acquired library lock for {config.library_name} to optimize {design_to_optimize}")
 
             LOGGER.debug(f"Optimizing {design_to_optimize}")
@@ -371,6 +381,9 @@ quit -code 0
                 if not status:
                     LOGGER.debug(f"Failed to optimize {design_to_optimize}.")
                 else:
+                    while (Path(library.directory) / "_lock").exists():
+                        LOGGER.debug(f"Waiting for {Path(library.directory) / "_lock"} to be removed")
+                        sleep(0.05)
                     LOGGER.debug(f"{design_to_optimize} optimization completed.")
                     self._optimized_designs[design_to_optimize]["vopt_event"].set()
                 self._optimized_libraries[config.library_name].release()
