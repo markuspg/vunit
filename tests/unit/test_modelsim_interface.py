@@ -35,7 +35,7 @@ class TestModelSimInterface(unittest.TestCase):
         write_file("file.vhd", "")
         project.add_source_file("file.vhd", "lib", file_type="vhdl", vhdl_standard=VHDL.standard("2008"))
         simif.compile_project(project)
-        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "lib_path"]
+        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "-type", "directory", "lib_path"]
         process.assert_called_once_with(process_args, env=simif.get_env())
         check_args = [
             str(Path(self.prefix_path) / "vcom"),
@@ -58,7 +58,7 @@ class TestModelSimInterface(unittest.TestCase):
         write_file("file.vhd", "")
         project.add_source_file("file.vhd", "lib", file_type="vhdl", vhdl_standard=VHDL.standard("2002"))
         simif.compile_project(project)
-        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "lib_path"]
+        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "-type", "directory", "lib_path"]
         process.assert_called_once_with(process_args, env=simif.get_env())
         check_args = [
             str(Path(self.prefix_path) / "vcom"),
@@ -81,7 +81,7 @@ class TestModelSimInterface(unittest.TestCase):
         write_file("file.vhd", "")
         project.add_source_file("file.vhd", "lib", file_type="vhdl", vhdl_standard=VHDL.standard("93"))
         simif.compile_project(project)
-        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "lib_path"]
+        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "-type", "directory", "lib_path"]
         process.assert_called_once_with(process_args, env=simif.get_env())
         check_args = [
             str(Path(self.prefix_path) / "vcom"),
@@ -105,7 +105,7 @@ class TestModelSimInterface(unittest.TestCase):
         source_file = project.add_source_file("file.vhd", "lib", file_type="vhdl")
         source_file.set_compile_option("modelsim.vcom_flags", ["custom", "flags"])
         simif.compile_project(project)
-        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "lib_path"]
+        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "-type", "directory", "lib_path"]
         process.assert_called_once_with(process_args, env=simif.get_env())
         check_args = [
             str(Path(self.prefix_path) / "vcom"),
@@ -130,7 +130,7 @@ class TestModelSimInterface(unittest.TestCase):
         write_file("file.v", "")
         project.add_source_file("file.v", "lib", file_type="verilog")
         simif.compile_project(project)
-        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "lib_path"]
+        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "-type", "directory", "lib_path"]
         process.assert_called_once_with(process_args, env=simif.get_env())
         check_args = [
             str(Path(self.prefix_path) / "vlog"),
@@ -154,7 +154,7 @@ class TestModelSimInterface(unittest.TestCase):
         write_file("file.sv", "")
         project.add_source_file("file.sv", "lib", file_type="systemverilog")
         simif.compile_project(project)
-        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "lib_path"]
+        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "-type", "directory", "lib_path"]
         process.assert_called_once_with(process_args, env=simif.get_env())
         check_args = [
             str(Path(self.prefix_path) / "vlog"),
@@ -180,7 +180,7 @@ class TestModelSimInterface(unittest.TestCase):
         source_file = project.add_source_file("file.v", "lib", file_type="verilog")
         source_file.set_compile_option("modelsim.vlog_flags", ["custom", "flags"])
         simif.compile_project(project)
-        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "lib_path"]
+        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "-type", "directory", "lib_path"]
         process.assert_called_once_with(process_args, env=simif.get_env())
         check_args = [
             str(Path(self.prefix_path) / "vlog"),
@@ -206,7 +206,7 @@ class TestModelSimInterface(unittest.TestCase):
         write_file("file.v", "")
         project.add_source_file("file.v", "lib", file_type="verilog", include_dirs=["include"])
         simif.compile_project(project)
-        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "lib_path"]
+        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "-type", "directory", "lib_path"]
         process.assert_called_once_with(process_args, env=simif.get_env())
         check_args = [
             str(Path(self.prefix_path) / "vlog"),
@@ -231,7 +231,7 @@ class TestModelSimInterface(unittest.TestCase):
         write_file("file.v", "")
         project.add_source_file("file.v", "lib", file_type="verilog", defines={"defname": "defval"})
         simif.compile_project(project)
-        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "lib_path"]
+        process_args = [str(Path(self.prefix_path) / "vlib"), "-unix", "-type", "directory", "lib_path"]
         process.assert_called_once_with(process_args, env=simif.get_env())
         process_args = [
             str(Path(self.prefix_path) / "vlog"),
