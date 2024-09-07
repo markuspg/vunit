@@ -307,11 +307,11 @@ proc vunit_run {} {
         except Process.NonZeroExitCode:
             return False
 
-    def _optimize(self, config, script_path):
+    def _optimize(self, config, script_path):  # pylint: disable=unused-argument
         """
-        Return simulation target or False if optimization failed or None the optimization step isn't supported.
+        Return simulation target or False if optimization failed.
         """
-        return None
+        return "Optimize not supported"
 
     def simulate(self, output_path, test_suite_name, config, elaborate_only):
         """
@@ -324,7 +324,7 @@ proc vunit_run {} {
         batch_file_name = script_path / "batch.do"
 
         simulation_target = self._optimize(config, script_path)
-        if simulation_target == False:
+        if simulation_target is False:
             return False
 
         write_file(
