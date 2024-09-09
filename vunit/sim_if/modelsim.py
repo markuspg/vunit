@@ -105,6 +105,7 @@ class ModelSimInterface(VsimSimulatorMixin, SimulatorInterface):  # pylint: disa
         self._optimized_designs = {}
         self._optimized_libraries = {}
         self._vopt_lock = Lock()
+        self._library_lock = Lock()
 
     def _create_modelsim_ini(self):
         """
@@ -330,9 +331,11 @@ return False
         # Do not completely block to allow for Ctrl+C
         while not library_lock.acquire(timeout=0.05):
             pass
-        while (Path(library.directory) / "_lock").exists():
-            LOGGER.debug("Waiting for %s to be removed", Path(library.directory) / "_lock")
-            sleep(0.05)
+
+        for library in self._libraries:
+            while (Path(library.directory) / "_lock").exists():
+                LOGGER.debug("Waiting for %s to be removed", Path(library.directory) / "_lock")
+                sleep(0.05)
         LOGGER.debug("Acquired library lock for %s to optimize %s", config.library_name, design_to_optimize)
 
     def _release_library_lock(self, library, config):
@@ -340,9 +343,10 @@ return False
         Release library lock and wait for any lock file to be removed.
         """
         with self._vopt_lock:
-            while (Path(library.directory) / "_lock").exists():
-                LOGGER.debug("Waiting for %s to be removed", Path(library.directory) / "_lock")
-                sleep(0.05)
+            for library in self._libraries:
+                while (Path(library.directory) / "_lock").exists():
+                    LOGGER.debug("Waiting for %s to be removed", Path(library.directory) / "_lock")
+                    sleep(0.05)
             self._optimized_libraries[config.library_name].release()
 
     def _optimize(self, config, script_path):
@@ -370,7 +374,7 @@ return False
                 optimize = True
 
                 if not self._optimized_libraries.get(config.library_name, None):
-                    self._optimized_libraries[config.library_name] = Lock()
+                    self._optimized_libraries[config.library_name] = self._library_lock
 
             simulation_target, vopt_event = self._optimized_designs[design_to_optimize].values()
 
