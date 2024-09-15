@@ -387,9 +387,6 @@ return False
             # non-alphanumeric characters is a simple solution to that
             simulation_target = "opt_" + "".join(ch for ch in design_to_optimize if ch.isalnum())
 
-            with self._vopt_lock:
-                self._optimized_designs[design_to_optimize]["simulation_target"] = simulation_target
-
             optimize_file_name = script_path / "optimize.do"
             write_file(
                 str(optimize_file_name), self._create_optimize_script(design_to_optimize, simulation_target, config)
@@ -416,6 +413,9 @@ return False
             if not status:
                 LOGGER.debug("Failed to optimize %s.", design_to_optimize)
                 return False
+
+            with self._vopt_lock:
+                self._optimized_designs[design_to_optimize]["simulation_target"] = simulation_target
 
             LOGGER.debug("%s optimization completed.", design_to_optimize)
             self._optimized_designs[design_to_optimize]["vopt_event"].set()
