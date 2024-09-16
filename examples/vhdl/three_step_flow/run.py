@@ -9,8 +9,6 @@ from pathlib import Path
 from vunit import VUnit, VUnitCLI
 from os import environ
 import logging
-from watchdog.observers import Observer
-from watchdog.events import LoggingEventHandler
 
 logging.basicConfig(
     level=logging.DEBUG, format="%(asctime)s.%(msecs)03d - %(levelname)7s - %(message)s", datefmt="%H:%M:%S"
@@ -40,15 +38,4 @@ for value in range(5):
 vu.set_sim_option("modelsim.three_step_flow", True)
 vu.set_sim_option("modelsim.vsim_flags", ["-novopt", "-suppress", "12110"])
 
-event_handler = LoggingEventHandler()
-observer = Observer()
-observer.schedule(event_handler, root / "vunit_out" / "modelsim", recursive=True)
-observer.start()
-
-
-def post_run(results):
-    observer.stop()
-    observer.join()
-
-
-vu.main(post_run=post_run)
+vu.main()

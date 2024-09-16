@@ -103,9 +103,8 @@ class ModelSimInterface(VsimSimulatorMixin, SimulatorInterface):  # pylint: disa
         assert not (persistent and gui)
         self._create_modelsim_ini()
         self._optimized_designs = {}
-        self._optimized_libraries = {}
-        self._vopt_lock = Lock()
-        self._library_lock = Lock()
+        self._library_locks = {}
+        self._shared_state_lock = Lock()
 
     def _create_modelsim_ini(self):
         """
@@ -237,7 +236,7 @@ class ModelSimInterface(VsimSimulatorMixin, SimulatorInterface):  # pylint: disa
             del libraries["others"]
         return libraries
 
-    def _create_optimize_script(self, design_to_optimize, simulation_target, config):
+    def _create_optimize_script(self, design_to_optimize, optimized_design, config):
         """
         Create vopt script.
         """
@@ -246,7 +245,7 @@ class ModelSimInterface(VsimSimulatorMixin, SimulatorInterface):  # pylint: disa
             f"-work {{{config.library_name}}}",
             "-quiet",
             f"-floatgenerics+{config.entity_name}.",
-            f"-o {{{simulation_target}}}",
+            f"-o {{{optimized_design}}}",
             self._vopt_extra_args(config),
         ]
 
@@ -319,12 +318,24 @@ return False
 
         return status
 
+    @staticmethod
+    def _wait_for_file_lock(library):
+        """
+        Wait for any _lock file to be removed.
+        """
+        log_waiting = True
+        while (Path(library.directory) / "_lock").exists():
+            if log_waiting:
+                LOGGER.debug("Waiting for %s to be removed", Path(library.directory) / "_lock")
+                log_waiting = False
+            sleep(0.05)
+
     def _acquire_library_lock(self, library, config, design_to_optimize):
         """
         Acquire library lock and wait for any lock file to be removed.
         """
-        with self._vopt_lock:
-            library_lock = self._optimized_libraries[config.library_name]
+        with self._shared_state_lock:
+            library_lock = self._library_locks[config.library_name]
 
         if library_lock.locked():
             LOGGER.debug("Waiting for library lock for %s to optimize %s", config.library_name, design_to_optimize)
@@ -332,22 +343,16 @@ return False
         while not library_lock.acquire(timeout=0.05):
             pass
 
-        for library in self._libraries:
-            while (Path(library.directory) / "_lock").exists():
-                LOGGER.debug("Waiting for %s to be removed", Path(library.directory) / "_lock")
-                sleep(0.05)
+        self._wait_for_file_lock(library)
         LOGGER.debug("Acquired library lock for %s to optimize %s", config.library_name, design_to_optimize)
 
     def _release_library_lock(self, library, config):
         """
         Release library lock and wait for any lock file to be removed.
         """
-        with self._vopt_lock:
-            for library in self._libraries:
-                while (Path(library.directory) / "_lock").exists():
-                    LOGGER.debug("Waiting for %s to be removed", Path(library.directory) / "_lock")
-                    sleep(0.05)
-            self._optimized_libraries[config.library_name].release()
+        with self._shared_state_lock:
+            self._wait_for_file_lock(library)
+            self._library_locks[config.library_name].release()
 
     def _optimize(self, config, script_path):
         if config.architecture_name is None:
@@ -368,15 +373,19 @@ return False
         library = libraries[config.library_name]
 
         optimize = False
-        with self._vopt_lock:
-            if not self._optimized_designs.get(design_to_optimize, None):
-                self._optimized_designs[design_to_optimize] = {"simulation_target": None, "vopt_event": Event()}
+        with self._shared_state_lock:
+            if design_to_optimize not in self._optimized_designs:
+                LOGGER.debug("%s scheduled for optimization", design_to_optimize)
+                self._optimized_designs[design_to_optimize] = {
+                    "optimized_design": None,
+                    "optimization_completed": Event(),
+                }
                 optimize = True
 
-                if not self._optimized_libraries.get(config.library_name, None):
-                    self._optimized_libraries[config.library_name] = self._library_lock
+                if config.library_name not in self._library_locks:
+                    self._library_locks[config.library_name] = Lock()
 
-            simulation_target, vopt_event = self._optimized_designs[design_to_optimize].values()
+            optimized_design, optimization_completed = self._optimized_designs[design_to_optimize].values()
 
         if optimize:
             self._acquire_library_lock(library, config, design_to_optimize)
@@ -385,11 +394,11 @@ return False
 
             # vopt has limitations on how the optimized design can be named. Simply removing
             # non-alphanumeric characters is a simple solution to that
-            simulation_target = "opt_" + "".join(ch for ch in design_to_optimize if ch.isalnum())
+            optimized_design = "opt_" + "".join(ch for ch in design_to_optimize if ch.isalnum())
 
             optimize_file_name = script_path / "optimize.do"
             write_file(
-                str(optimize_file_name), self._create_optimize_script(design_to_optimize, simulation_target, config)
+                str(optimize_file_name), self._create_optimize_script(design_to_optimize, optimized_design, config)
             )
 
             if self._persistent_shell is not None:
@@ -414,25 +423,25 @@ return False
                 LOGGER.debug("Failed to optimize %s.", design_to_optimize)
                 return False
 
-            with self._vopt_lock:
-                self._optimized_designs[design_to_optimize]["simulation_target"] = simulation_target
-
             LOGGER.debug("%s optimization completed.", design_to_optimize)
-            self._optimized_designs[design_to_optimize]["vopt_event"].set()
 
-        elif not simulation_target:
+            with self._shared_state_lock:
+                self._optimized_designs[design_to_optimize]["optimized_design"] = optimized_design
+            self._optimized_designs[design_to_optimize]["optimization_completed"].set()
+
+        elif not optimized_design:
             LOGGER.debug("Waiting for %s to be optimized.", design_to_optimize)
             # Do not completely block to allow for Ctrl+C
-            while not vopt_event.wait(0.05):
+            while not optimization_completed.wait(0.05):
                 pass
             LOGGER.debug("Done waiting for %s to be optimized.", design_to_optimize)
-            with self._vopt_lock:
-                simulation_target = self._optimized_designs[design_to_optimize]["simulation_target"]
+            with self._shared_state_lock:
+                optimized_design = self._optimized_designs[design_to_optimize]["optimized_design"]
 
         else:
             LOGGER.debug("Reusing optimized %s.", design_to_optimize)
 
-        return simulation_target
+        return optimized_design
 
     def _create_load_function(self, test_suite_name, config, output_path, simulation_target):
         """
