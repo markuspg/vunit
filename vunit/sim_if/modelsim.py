@@ -318,19 +318,7 @@ return False
 
         return status
 
-    @staticmethod
-    def _wait_for_file_lock(library):
-        """
-        Wait for any _lock file to be removed.
-        """
-        log_waiting = True
-        while (Path(library.directory) / "_lock").exists():
-            if log_waiting:
-                LOGGER.debug("Waiting for %s to be removed", Path(library.directory) / "_lock")
-                log_waiting = False
-            sleep(0.05)
-
-    def _acquire_library_lock(self, library, config, design_to_optimize):
+    def _acquire_library_lock(self, config, design_to_optimize):
         """
         Acquire library lock and wait for any lock file to be removed.
         """
@@ -343,15 +331,13 @@ return False
         while not library_lock.acquire(timeout=0.05):
             pass
 
-        self._wait_for_file_lock(library)
         LOGGER.debug("Acquired library lock for %s to optimize %s", config.library_name, design_to_optimize)
 
-    def _release_library_lock(self, library, config):
+    def _release_library_lock(self, config):
         """
         Release library lock and wait for any lock file to be removed.
         """
         with self._shared_state_lock:
-            self._wait_for_file_lock(library)
             self._library_locks[config.library_name].release()
 
     def _optimize(self, config, script_path):
@@ -388,7 +374,7 @@ return False
             optimized_design, optimization_completed = self._optimized_designs[design_to_optimize].values()
 
         if optimize:
-            self._acquire_library_lock(library, config, design_to_optimize)
+            self._acquire_library_lock(config, design_to_optimize)
 
             LOGGER.debug("Optimizing %s", design_to_optimize)
 
@@ -417,7 +403,7 @@ return False
 
                 status = self._run_optimize_batch_file(batch_file_name, script_path)
 
-            self._release_library_lock(library, config)
+            self._release_library_lock(config)
 
             if not status:
                 LOGGER.debug("Failed to optimize %s.", design_to_optimize)
